@@ -9,6 +9,7 @@
 </header>
 <div class="shell">
   <nav class="sidebar" aria-label="Проекты">
+    <button class="project-link overview-link" [class.selected]="overview()" (click)="showOverview()" [attr.aria-current]="overview() ? 'page' : null"><span>Требует внимания<small>Мои активные проекты</small></span><span class="badge">{{attention()?.items?.length ?? 0}}</span></button>
     <div class="nav-heading">Ваши проекты <span>{{projects().length}}</span></div>
     @for (p of projects(); track p.id) {
       <button class="project-link" [class.selected]="project()?.id === p.id" [attr.aria-current]="project()?.id === p.id ? 'page' : null" (click)="selectProject(p)">
@@ -20,7 +21,41 @@
   <main>
     @if (error()) { <div role="alert" class="alert error">{{error()}}</div> }
     @if (notice()) { <div role="status" class="alert success">{{notice()}}</div> }
-    @if (project(); as p) {
+    @if (overview()) {
+      <div class="breadcrumb">Рабочее пространство <span>/</span> Обзор руководителя</div>
+      <div class="page-heading"><div><h1>Требует внимания</h1><p>Задачи всех исполнителей в проектах, которыми вы руководите.</p></div><button (click)="load()" [disabled]="loading()">Обновить</button></div>
+      <div class="reason-filters" aria-label="Причины внимания">
+        <button [class.active]="!reason()" (click)="reason.set('')">Все <strong>{{attention()?.items?.length ?? 0}}</strong></button>
+        @for (r of reasons; track r.value) { <button [class.active]="reason() === r.value" (click)="reason.set(r.value)">{{r.label}} <strong>{{attention()?.counts?.[r.value] ?? 0}}</strong></button> }
+      </div>
+      <div class="toolbar overview-toolbar">
+        <input aria-label="Поиск в обзоре" placeholder="Найти задачу или проект…" [ngModel]="overviewSearch()" (ngModelChange)="overviewSearch.set($event)">
+        <select aria-label="Проект в обзоре" [ngModel]="overviewProject()" (ngModelChange)="overviewProject.set($event)"><option value="">Все мои проекты</option>@for (p of ownedProjects(); track p.id) { <option [value]="p.id">{{p.name}}</option> }</select>
+        @if (reason() || overviewSearch() || overviewProject()) { <button (click)="resetAttentionFilters()">Сбросить</button> }
+      </div>
+      <p class="overview-hint">Сначала блокировки и возможные просьбы о помощи, затем просрочки и другие риски. Признаки из текста — подсказка для проверки; они могут быть неполными или уже неактуальными.</p>
+      @if (loading()) { <div class="empty" role="status">Обновляем обзор…</div> }
+      @else if (error() && !attention()) { <button (click)="load()">Повторить загрузку</button> }
+      @else {
+        <div class="attention-list">
+          @for (task of visibleAttention(); track task.id) {
+            <article class="attention-card">
+              <div class="attention-meta"><span>{{task.project_name}}</span><span>#{{task.id}}</span></div>
+              <button class="attention-title" (click)="openTask(task)">{{task.title}}</button>
+              <div class="signals">@for (s of task.signals; track s.code) { <span [class]="'signal ' + s.code">{{s.label}}</span> }</div>
+              @if (task.evidence; as c) { <blockquote><p>{{c.body}}</p><footer>{{c.author}} · {{c.created_at | date:'dd.MM HH:mm':'UTC'}} UTC</footer></blockquote> }
+              @else if (task.description_signal) { <blockquote><p>{{task.description}}</p><footer>Из описания задачи</footer></blockquote> }
+              @else if (task.latest_comment; as c) { <blockquote><p>{{c.body}}</p><footer>Последний комментарий · {{c.author}}</footer></blockquote> }
+              @else { <p class="muted">{{task.description || 'Обсуждения пока нет.'}}</p> }
+              <div class="attention-footer"><span>{{userName(task.assignee_id)}}</span><span>{{task.due_at ? (task.due_at | date:'dd.MM.yyyy HH:mm':'UTC') + ' UTC' : 'Без срока'}}</span><button (click)="openTask(task)">Разобраться · {{task.comment_count}}</button></div>
+            </article>
+          } @empty {
+            <div class="empty"><h2>{{attention()?.items?.length ? 'Ничего по этим условиям' : 'Нет задач с выбранными признаками внимания'}}</h2><p>{{ownedProjects().length ? 'Все задачи и полная история остаются доступны в проектах.' : 'У вас нет активных проектов в роли руководителя. Доступные проекты — в меню.'}}</p></div>
+          }
+        </div>
+      }
+      <p class="footnote">Архивные и завершённые задачи исключены. Сроки — UTC. Обзор обновляется после ваших изменений и кнопкой «Обновить».</p>
+    } @else if (project(); as p) {
       <div class="breadcrumb">Проекты <span>/</span> {{p.archived ? 'Архив' : 'Рабочее пространство'}}</div>
       <div class="page-heading"><div><h1>{{p.name}}</h1><p>{{p.description}}</p></div>
         @if (!p.archived) { <button class="primary" (click)="createTask()" [disabled]="loading() || saving()">＋ Новая задача</button> }
@@ -45,25 +80,31 @@
     @else if (error()) { <button (click)="load()">Повторить загрузку</button> }
     @else { <div class="empty">У вас пока нет проектов.</div> }
   </main>
-  @if (detail() || creating()) {
+  @if (detail() || creating() || detailLoading() || detailError()) {
     <aside class="detail" aria-label="Карточка задачи">
       <div class="drawer-heading"><span>{{creating() ? 'Новая задача' : 'Задача #' + detail()?.id}}</span><button aria-label="Закрыть карточку" (click)="closeDetail()">✕</button></div>
+      <p class="muted">{{detailProject()?.name}}</p>
+      @if (detailError()) { <div class="alert error" role="alert">{{detailError()}}</div> }
+      @if (notice()) { <div class="alert success" role="status">{{notice()}}</div> }
+      @if (detailLoading()) { <p role="status">Загружаем карточку…</p> }
+      @if (detail() || creating()) {
       <form (ngSubmit)="saveTask()">
-        <fieldset [disabled]="project()?.archived || saving()">
+        <fieldset [disabled]="detailProject()?.archived || saving()">
           <label>Название<input name="title" [(ngModel)]="draft.title" required maxlength="200"></label>
-          <label>Описание<textarea name="description" [(ngModel)]="draft.description" rows="4" maxlength="5000"></textarea></label>
+          <label>Описание<textarea name="description" [(ngModel)]="draft.description" rows="4" maxlength="10000"></textarea></label>
           <div class="form-row"><label>Статус<select name="status" aria-label="Статус" [(ngModel)]="draft.status">@for (s of statuses; track s.value) { <option [value]="s.value">{{s.label}}</option> }</select></label>
-          <label>Исполнитель<select name="assignee" aria-label="Исполнитель" [(ngModel)]="draft.assignee_id"><option [ngValue]="null">Не назначен</option>@for (u of project()?.members; track u.id) { <option [ngValue]="u.id">{{u.name}}</option> }</select></label></div>
+          <label>Исполнитель<select name="assignee" aria-label="Исполнитель" [(ngModel)]="draft.assignee_id"><option [ngValue]="null">Не назначен</option>@for (u of detailProject()?.members; track u.id) { <option [ngValue]="u.id">{{u.name}}</option> }</select></label></div>
           <label>Срок (UTC)<input type="datetime-local" name="due" [(ngModel)]="draft.due_at"></label>
-          @if (!project()?.archived) { <button type="submit" class="primary" [disabled]="!draft.title.trim()">{{saving() ? 'Сохраняем…' : 'Сохранить задачу'}}</button> }
+          @if (!detailProject()?.archived) { <button type="submit" class="primary" [disabled]="!draft.title.trim()">{{saving() ? 'Сохраняем…' : 'Сохранить задачу'}}</button> }
         </fieldset>
       </form>
       @if (detail(); as task) {
         <section class="comments"><h2>Обсуждение <span>{{task.comments.length}}</span></h2>
           @for (c of task.comments; track c.id) { <article><strong>{{c.author}}</strong><time>{{c.created_at | date:'dd.MM.yyyy HH:mm':'UTC'}}</time><p>{{c.body}}</p></article> }
           @empty { <p class="muted">Комментариев пока нет.</p> }
-          @if (!project()?.archived) { <form (ngSubmit)="addComment()"><label>Комментарий<textarea name="comment" [(ngModel)]="comment" rows="3" required maxlength="2000" [disabled]="saving()"></textarea></label><button type="submit" [disabled]="!comment.trim() || saving()">Добавить комментарий</button></form> }
+          @if (!detailProject()?.archived) { <form (ngSubmit)="addComment()"><label>Комментарий<textarea name="comment" [(ngModel)]="comment" rows="3" required maxlength="5000" [disabled]="saving()"></textarea><small>{{bytes(comment)}} / 5000 байт</small></label><button type="submit" [disabled]="!comment.trim() || saving() || bytes(comment.trim()) > 5000">Добавить комментарий</button></form> }
         </section>
+      }
       }
     </aside>
   }

@@ -40,6 +40,11 @@ final class Application
 
     private function dispatch(string $method, string $path): void
     {
+        if ($method === 'GET' && $path === '/api/attention') {
+            require_once __DIR__ . '/Attention.php';
+            $this->respond((new Attention($this->db))->forUser($this->userId));
+            return;
+        }
         if ($method === 'GET' && $path === '/api/context') {
             $this->respond([
                 'user' => $this->one('SELECT * FROM users WHERE id = ?', [$this->userId]),
@@ -61,7 +66,7 @@ final class Application
         if (preg_match('#^/api/projects/(\d+)/tasks$#', $path, $match)) {
             $project = $this->project((int) $match[1]);
             if ($method === 'GET') {
-                $this->respond($this->all('SELECT t.* FROM tasks t JOIN users u ON u.id=t.assignee_id WHERE t.project_id=? ORDER BY t.id', [$project['id']]));
+                $this->respond($this->all('SELECT t.* FROM tasks t WHERE t.project_id=? ORDER BY t.id', [$project['id']]));
                 return;
             }
             if ($method === 'POST') {
@@ -102,8 +107,14 @@ final class Application
             $task = $this->task((int) $match[1]);
             $this->writable($this->project($task['project_id']));
             $data = $this->input();
-            $this->text($data['body'] ?? null, 'Комментарий', 5000, true);
-            throw new ApiError('Добавление комментариев пока не реализовано', 501);
+            if (array_diff(array_keys($data), ['body'])) {
+                throw new ApiError('Неизвестные поля комментария', 422);
+            }
+            $body = $this->text($data['body'] ?? null, 'Комментарий', 5000, true);
+            $stmt = $this->db->prepare('INSERT INTO comments (task_id,user_id,body,created_at) VALUES (?,?,?,?)');
+            $stmt->execute([$task['id'], $this->userId, $body, gmdate('Y-m-d\TH:i:s\Z')]);
+            $this->respond($this->one('SELECT c.*,u.name AS author FROM comments c JOIN users u ON u.id=c.user_id WHERE c.id=?', [(int) $this->db->lastInsertId()]), 201);
+            return;
         }
         throw new ApiError('Маршрут не найден', 404);
     }

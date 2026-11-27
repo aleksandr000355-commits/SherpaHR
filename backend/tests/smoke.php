@@ -113,6 +113,24 @@ try {
     check(count($response['data']) === 6, 'initialization does not duplicate or reset data');
     check(request('GET', '/api/tasks/9999')[0] === 404, 'missing task returns 404');
     check(request('GET', '/api/unknown')[0] === 404, 'unknown route returns 404');
+    [$status, $response] = request('GET', '/api/projects/2/tasks');
+    check(in_array(7, array_column($response['data'], 'id'), true), 'unassigned task remains visible');
+    check(request('POST', '/api/tasks/1/comments', ['body' => str_repeat('я', 2501)])[0] === 422, 'comment UTF-8 byte limit enforced');
+    check(request('POST', '/api/tasks/1/comments', ['body' => 'text', 'user_id' => 3])[0] === 422, 'cannot spoof comment author');
+    [$status, $response] = request('GET', '/api/attention');
+    $items = $response['data']['items'];
+    $ids = array_column($items, 'id');
+    check($status === 200 && in_array(7, $ids, true), 'attention includes request without deadline or assignee');
+    check(!array_intersect([3, 9, 10, 11], $ids), 'attention excludes done, archive, and hidden tasks');
+    $first = array_values(array_filter($items, fn($t) => $t['id'] === 1))[0];
+    check(str_contains($first['evidence']['body'], 'Нужна помощь'), 'request evidence survives a later neutral comment');
+    check(request('GET', '/api/attention', null, 2)[1]['data']['items'] === [], 'member without owned projects has empty manager overview');
+    $vera = request('GET', '/api/attention', null, 3)[1]['data']['items'];
+    check(array_column($vera, 'id') === [11], 'manager sees only owned and accessible active projects');
+    $current = request('GET', '/api/tasks/1')[1]['data'];
+    check(request('PATCH', '/api/tasks/1', ['status' => 'done', 'version' => $current['version']])[0] === 200, 'attention task can be resolved');
+    $after = request('GET', '/api/attention')[1]['data']['items'];
+    check(!in_array(1, array_column($after, 'id'), true), 'resolved task leaves attention');
     echo "PASS: $count API checks\n";
 } catch (Throwable $error) {
     fwrite(STDERR, $error->getMessage() . PHP_EOL . file_get_contents($directory . '/server.log'));
